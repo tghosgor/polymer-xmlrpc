@@ -26,7 +26,7 @@ This program is free software: you can redistribute it and/or modify
 
 <link rel="import" href="../core-ajax/core-ajax.html">
 
-<polymer-element name="polymer-xmlrpc" attributes="url method params on-response" hidden>
+<polymer-element name="w-xmlrpc" attributes="url method params on-response" hidden>
 <template>
   <core-ajax id="rpc"
              url="{{url}}"
@@ -59,6 +59,10 @@ This program is free software: you can redistribute it and/or modify
   };
 
   Polymer({
+    publish: {
+      debug: 0
+    },
+
     go: function() {
       this.async(function() {
         this.$.rpc.go();
@@ -70,6 +74,9 @@ This program is free software: you can redistribute it and/or modify
     },
 
     paramsChanged: function(oldValue, newValue) {
+      if (newValue.constructor !== Array)
+        throw 'params attribute must be an Array.';
+
       this.dataChanged();
     },
 
@@ -82,40 +89,34 @@ This program is free software: you can redistribute it and/or modify
       this.params.forEach(function(e) {
         body += '<param><value>';
 
-        switch (typeof e) {
-          case 'number':
-            body += '<i4>' + parseInt(e) + '</i4>';
-            break;
-          case 'string':
-            body += '<string>' + e + '</string>';
-            break;
-          default:
-            break;
-        }
-
+        body += this.createValue(e);
 
         body += '</value></param>';
-      });
+      }.bind(this));
 
-      body += '</params>' +
-              '</methodCall>';
+      body += '</params></methodCall>';
 
       this.$.rpc.body = body;
+
+      if (this.debug >= 1)
+        console.log('xml-rpc new data', body);
     },
 
     handleResponse: function(e) {
       var status = e.detail.xhr.status;
       var response = e.detail.response;
 
-      console.log(status, response);
+      if (this.debug >= 1)
+        console.log('xml-rpc response', status, response);
 
       var parsed = this.parseXml(response);
-      
+
       this.fire('response', {response: parsed});
     },
 
     parseXml: function(xmlRoot) {
       var ret = [];
+
 
       var methodResponses = getSubsByTagName(xmlRoot, 'methodResponse');
 
@@ -150,6 +151,49 @@ This program is free software: you can redistribute it and/or modify
       return ret;
     },
 
+    createValue: function(value) {
+      if (value === undefined)
+        throw 'Invalid value type given; ' + typeof(value);
+
+      switch (value.constructor) {
+      case Number:
+        return '<i4>' + parseInt(value) + '</i4>';
+
+      case String:
+        return '<string>' + value + '</string>';
+
+      case Array:
+        var ret = '<array><data>';
+
+        value.forEach(function(subValue) {
+          ret += '<value>';
+
+          ret += this.createValue(subValue);
+
+          ret += '</value>';
+        }.bind(this));
+
+        ret += '</data></array>';
+
+        return ret;
+
+      default:// object
+        var ret = '<struct>';
+
+        for (var key in value) {
+          if (value.hasOwnProperty(key)) {// key is an actual property
+            var subValue = value[key];
+
+            ret += '<member><name>' + key + '</name><value>' + this.createValue(subValue) + '</value></member>';
+          }
+        }
+
+        ret += '</struct>';
+
+        return ret;
+      }
+    },
+
     parseValue: function(elem) {
       var childNodes = elem.children;
 
@@ -158,21 +202,25 @@ This program is free software: you can redistribute it and/or modify
       var childNode = childNodes[0];
 
       switch (childNode.nodeName) {
-        case 'struct':
-          var object = this.parseStruct(childNode);
+      case 'struct':
+        var object = this.parseStruct(childNode);
 
-          return object;
-        case 'string':
-          return childNode.innerHTML;
-        case 'int':
-        case 'i4':
-          return parseInt(childNode.innerHTML);
-        case 'double':
-          return parseFloat(childNode.innerHTML);
-        case 'boolean':
-          return Boolean(childNode.innerHTML);
-        default:
-          throw 'Value type \'' + childNode.nodeName + '\' not implemented.';
+        return object;
+      case 'array':
+        var object = this.parseArray(childNode);
+
+        return object;
+      case 'string':
+        return childNode.innerHTML;
+      case 'int':
+      case 'i4':
+        return parseInt(childNode.innerHTML);
+      case 'double':
+        return parseFloat(childNode.innerHTML);
+      case 'boolean':
+        return childNode.innerHTML === '1';
+      default:
+        throw 'Value type \'' + childNode.nodeName + '\' not implemented.';
       }
     },
 
@@ -202,6 +250,22 @@ This program is free software: you can redistribute it and/or modify
 
         ret[name] = value;
       }
+
+      return ret;
+    },
+
+    parseArray: function(elem) {
+      var ret = [];
+
+      var dataElems = getSubsByTagName(elem, 'data');
+      assert(dataElems.length, 1, 'Parse error');
+      var dataElem = dataElems[0];
+
+      var valueElems = getSubsByTagName(dataElem, 'value');
+
+      valueElems.forEach(function(valueElem) {
+        ret.push(this.parseValue(valueElem));
+      }.bind(this));
 
       return ret;
     }
