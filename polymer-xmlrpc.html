@@ -69,6 +69,12 @@ This program is free software: you can redistribute it and/or modify
       });
     },
 
+    abort: function() {
+      this.async(function() {
+        this.$.rpc.abort();
+      });
+    },
+
     methodChanged: function(oldValue, newValue) {
       this.dataChanged();
     },
