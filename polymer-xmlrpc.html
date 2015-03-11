@@ -63,6 +63,10 @@ This program is free software: you can redistribute it and/or modify
       debug: 0
     },
 
+    computed: {
+      loading: '$.rpc.loading'
+    },
+
     go: function() {
       this.async(function() {
         this.$.rpc.go();
