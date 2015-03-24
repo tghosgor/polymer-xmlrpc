@@ -22,22 +22,24 @@ This program is free software: you can redistribute it and/or modify
       this.$.xmlRpc.go();
 -->
 
-<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="/res/components/polymer/polymer.html">
 
-<link rel="import" href="../core-ajax/core-ajax.html">
+<link rel="import" href="/res/components/core-ajax/core-ajax.html">
 
-<polymer-element name="polymer-xmlrpc" attributes="url method params on-response" hidden>
+<polymer-element name="polymer-xmlrpc" attributes="url method params on-response on-error" hidden>
 <template>
   <core-ajax id="rpc"
              url="{{url}}"
              contentType="application/xml"
              method="post"
              handleAs="xml"
-             on-core-response="{{handleResponse}}">
+             on-core-response="{{handleResponse}}"
+             on-core-response="{{handleError}}">
   </core-ajax>
 </template>
 
 <script>
+// TODO: add auto using this.job
 (function() {
   var getSubsByTagName = function(o, tagName) {
     var ret = [];
@@ -64,7 +66,7 @@ This program is free software: you can redistribute it and/or modify
     },
 
     computed: {
-      loading: '$.rpc.loading'
+      ajax: '$.rpc',
     },
 
     go: function() {
@@ -122,6 +124,16 @@ This program is free software: you can redistribute it and/or modify
       var parsed = this.parseXml(response);
 
       this.fire('response', {response: parsed});
+    },
+
+    handleError: function(e) {
+      var status = e.detail.xhr.status;
+      var error = e.detail.error;
+
+      if (this.debug >= 1)
+        console.log('xml-rpc error', status, response);
+
+      this.fire('error', {error: error});
     },
 
     parseXml: function(xmlRoot) {
