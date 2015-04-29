@@ -17,29 +17,17 @@ This program is free software: you can redistribute it and/or modify
 
 <!--
   Example usage: 
-      this.$.xmlRpc.method = 'Test.Method';
-      this.$.xmlRpc.params = ['', '', 'Test'];
-      this.$.xmlRpc.go();
+      this.$.xmlRpc.rpcMethod = 'Test.Method';
+      this.$.xmlRpc.rpcParams = ['', '', 'Test'];
+      this.$.xmlRpc.go({ onResponse: callbackFunction });
 -->
 
 <link rel="import" href="../polymer/polymer.html">
 
 <link rel="import" href="../core-ajax/core-ajax.html">
 
-<polymer-element name="polymer-xmlrpc" attributes="url method params on-response on-error" hidden>
-<template>
-  <core-ajax id="rpc"
-             url="{{url}}"
-             contentType="application/xml"
-             method="post"
-             handleAs="xml"
-             on-core-response="{{handleResponse}}"
-             on-core-response="{{handleError}}">
-  </core-ajax>
-</template>
-
+<polymer-element name="polymer-xmlrpc" extends="core-ajax" attributes="rpcMethod rpcParams rpcLookupTable rpcLoading rpcError on-response on-error on-complete debug">
 <script>
-// TODO: add auto using this.job
 (function() {
   var getSubsByTagName = function(o, tagName) {
     var ret = [];
@@ -61,44 +49,83 @@ This program is free software: you can redistribute it and/or modify
   };
 
   Polymer({
-    publish: {
-      debug: 0
+    rpcMethod: '',
+    rpcError: null,
+    debug: 0,
+
+    observe: {
+      'rpcMethod rpcParams': 'autoUpdateBody',
     },
 
     computed: {
-      ajax: '$.rpc',
+      'rpcLoading': 'loading',
     },
 
-    go: function() {
-      this.async(function() {
-        this.$.rpc.go();
-      });
+    ready: function() {
+      this.super();
+
+      this.contentType = 'application/xml';
+      this.method = 'POST';
+      this.handleAs = 'xml';
+
+      this.addEventListener('core-response', this.handleResponse);
+      this.addEventListener('core-error', this.handleError);
+      this.addEventListener('core-complete', this.handleComplete);
     },
 
-    abort: function() {
-      this.async(function() {
-        this.$.rpc.abort();
-      });
+    created: function() {
+      this.super();
+
+      this.rpcLookupTable = {};
     },
 
-    methodChanged: function(oldValue, newValue) {
-      this.dataChanged();
+    go: function(props) {
+      if (!this.auto) {
+        this.updateBody();
+      }
+
+      if (!props)
+        props = {};
+
+
+      var xhr = this.super();
+
+
+      props.rpcMethod = this.rpcMethod;
+      props.rpcParams = this.rpcParams;
+
+
+      var tableEntry = this.rpcLookupTable[this.rpcMethod];
+
+      if (tableEntry) {
+        if (tableEntry.inProgress === undefined)
+          tableEntry.inProgress = 0;
+
+        ++tableEntry.inProgress;
+
+        props.rpcLookupTableEntry = tableEntry;
+      }
+
+
+      xhr.rpcProps = props;
+
+
+      return xhr;
     },
 
-    paramsChanged: function(oldValue, newValue) {
-      if (newValue.constructor !== Array)
-        throw 'params attribute must be an Array.';
-
-      this.dataChanged();
+    autoUpdateBody: function() {
+      if (this.auto) {
+        this.updateBodyJob = this.job(this.updateBodyJob, this.updateBody, 0);
+      }
     },
 
-    dataChanged: function() {
+    updateBody: function() {
       var body = '<?xml version="1.0"?>' +
                  '<methodCall>' +
-                 '<methodName>' + this.method + '</methodName>' +
+                 '<methodName>' + this.rpcMethod + '</methodName>' +
                  '<params>';
 
-      this.params.forEach(function(e) {
+      this.rpcParams.forEach(function(e) {
         body += '<param><value>';
 
         body += this.createValue(e);
@@ -108,32 +135,58 @@ This program is free software: you can redistribute it and/or modify
 
       body += '</params></methodCall>';
 
-      this.$.rpc.body = body;
+      this.body = body;
 
       if (this.debug >= 1)
         console.log('xml-rpc new data', body);
     },
 
     handleResponse: function(e) {
-      var status = e.detail.xhr.status;
-      var response = e.detail.response;
+      var d = e.detail;
 
-      if (this.debug >= 1)
-        console.log('xml-rpc response', status, response);
+      var parsed = this.parseXml(d.response);
 
-      var parsed = this.parseXml(response);
+      var tableEntry = d.xhr.rpcProps.rpcLookupTableEntry;
+      if (tableEntry && tableEntry.onResponse)
+        tableEntry.onResponse({ response: parsed, xhr: d.xhr });
 
-      this.fire('response', {response: parsed});
+      if (d.xhr.rpcProps.onResponse)
+        d.xhr.rpcProps.onResponse({ response: parsed, xhr: d.xhr });
+
+
+      this.rpcError = null;
+
+      this.fire('response', { response: parsed, xhr: d.xhr });
     },
 
     handleError: function(e) {
-      var status = e.detail.xhr.status;
-      var error = e.detail.error;
+      var d = e.detail;
 
-      if (this.debug >= 1)
-        console.log('xml-rpc error', status, response);
+      var tableEntry = d.xhr.rpcProps.rpcLookupTableEntry;
+      if (tableEntry && tableEntry.onError)
+        tableEntry.onError(d);
 
-      this.fire('error', {error: error});
+      if (d.xhr.rpcProps.onError)
+        d.xhr.rpcProps.onError(d);
+
+      this.rpcError = this.error;
+
+      this.fire('error', d);
+    },
+
+    handleComplete: function(e) {
+      var d = e.detail;
+
+      this.log(1, 'xml-rpc complete', d);
+
+      var tableEntry = d.xhr.rpcProps.rpcLookupTableEntry;
+      if (tableEntry && tableEntry.onComplete)
+        tableEntry.onComplete(d);
+
+      if (d.xhr.rpcProps.onComplete)
+        d.xhr.rpcProps.onComplete(d);
+
+      this.fire('complete', d);
     },
 
     parseXml: function(xmlRoot) {
@@ -170,12 +223,13 @@ This program is free software: you can redistribute it and/or modify
         ret.push(value);
       };
 
+
       return ret;
     },
 
     createValue: function(value) {
       if (value === undefined)
-        throw 'Invalid value type given; ' + typeof(value);
+        throw 'Invalid value type given; ' + typeof(value) + '(' + value + ')';
 
       switch (value.constructor) {
       case Number:
@@ -290,7 +344,19 @@ This program is free software: you can redistribute it and/or modify
       }.bind(this));
 
       return ret;
-    }
+    },
+
+    // level, object1, ..., objectN
+    log: function() {
+      if (this.debug >= arguments[0]) {
+        var argsArray = [];
+
+        for (var i = 1; i < arguments.length; ++i)
+          argsArray[i - 1] = arguments[i];
+
+        console.log(argsArray);
+      }
+    },
   });
 })();
 </script>
